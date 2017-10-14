@@ -1,0 +1,41 @@
+#ifndef protocol_data_h___
+#define  protocol_data_h___
+
+#include "s110config.h"
+#include "ble_fifo.h"
+
+
+
+
+typedef enum
+{
+NONE=0,
+NEW_CALL=0x99,//
+NEW_MSG,//
+GENERIC_NOTIFICATION,	
+NEW_GMSG,
+WHATSAPP,//
+FACEBOOK,
+TWITTER,
+SKYPE,
+QQ,//
+WEICHAR,//
+SNAPCHAT
+}MSG_TYPE;
+
+
+
+typedef struct
+{
+    MSG_TYPE type;
+    uint8_t len;
+    uint8_t msg[16];
+} STU_MSG;
+extern STU_MSG StuMsg;
+
+
+void task_and_ble_data(void);
+void SendMsg(MSG_TYPE msgtype,uint8_t msglen,uint8_t*msgbuf);
+#endif
+
+

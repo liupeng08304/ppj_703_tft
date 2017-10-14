@@ -1,0 +1,742 @@
+#include "s110config.h"
+#include "ble_fifo.h"
+#include "device_manager.h"
+#include "ble_db_discovery.h"
+#include "pstorage.h"
+#include "ble_ancs_c.h"
+#include "ancs51822.h"
+#include "utility.h"
+#include "core_cmInstr.h"
+#define IS_SRVC_CHANGED_CHARACT_PRESENT 0                                           /**< Include the service_changed characteristic. If not enabled, the server's database cannot be changed for the lifetime of the device. */
+
+
+
+#define DEAD_BEEF                       0xDEADBEEF                                  /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
+static dm_application_instance_t m_app_handle;                             /**< Application identifier allocated by the Device Manager. */
+static ble_gap_sec_params_t      m_sec_param;
+static dm_handle_t               m_peer_handle;                            /**< Identifies the peer that is currently connected. */
+//static app_timer_id_t            m_sec_req_timer_id;                       /**< Security request timer. The timer lets us start pairing request if one does not arrive from the Central. */
+static ble_db_discovery_t        m_ble_db_discovery;                       /**< Structure used to identify the DB Discovery module. */
+
+ble_nus_t                        m_nus;                                      /**< Structure to identify the Nordic UART Service. */
+static uint16_t                         m_conn_handle = BLE_CONN_HANDLE_INVALID;    /**< Handle of the current connection. */
+
+//static ble_uuid_t                       m_adv_uuids[] = {{BLE_UUID_NUS_SERVICE, NUS_SERVICE_UUID_TYPE}};  /**< Universally unique service identifier. */
+
+static void nus_data_handler(ble_nus_t * p_nus, uint8_t * p_data, uint16_t length);
+void StartAdv(bool startfast);
+
+/**@brief Function for assert macro callback.
+ *
+ * @details This function will be called in case of an assert in the SoftDevice.
+ *
+ * @warning This handler is an example only and does not fit a final product. You need to analyse
+ *          how your product is supposed to react in case of Assert.
+ * @warning On assert from the SoftDevice, the system can only recover on reset.
+ *
+ * @param[in] line_num    Line number of the failing ASSERT call.
+ * @param[in] p_file_name File name of the failing ASSERT call.
+ */
+void assert_nrf_callback(uint16_t line_num, const uint8_t * p_file_name)
+{
+    app_error_handler(DEAD_BEEF, line_num, p_file_name);
+}
+
+
+/**@brief Function for the GAP initialization.
+ *
+ * @details This function will set up all the necessary GAP (Generic Access Profile) parameters of
+ *          the device. It also sets the permissions and appearance.
+ */
+static void gap_params_init(void)
+{
+    uint32_t                err_code;
+    ble_gap_conn_params_t   gap_conn_params;
+
+
+    memset(&gap_conn_params, 0, sizeof(gap_conn_params));
+
+    gap_conn_params.min_conn_interval = MIN_CONN_INTERVAL;
+    gap_conn_params.max_conn_interval = MAX_CONN_INTERVAL;
+    gap_conn_params.slave_latency     = SLAVE_LATENCY;
+    gap_conn_params.conn_sup_timeout  = CONN_SUP_TIMEOUT;
+
+    err_code = sd_ble_gap_ppcp_set(&gap_conn_params);
+    APP_ERROR_CHECK(err_code);
+}
+
+
+
+/**@snippet [Handling the data received over BLE] */
+
+
+/**@brief Function for initializing services that will be used by the application.
+ */
+static void services_init(void)
+{
+    uint32_t       err_code;
+    ble_nus_init_t nus_init;
+
+    memset(&nus_init, 0, sizeof(nus_init));
+
+    nus_init.data_handler = nus_data_handler;
+
+    err_code = ble_nus_init(&m_nus, &nus_init);
+    APP_ERROR_CHECK(err_code);
+}
+
+
+
+/**@brief Function for handling an event from the Connection Parameters Module.
+ *
+ * @details This function will be called for all events in the Connection Parameters Module
+ *          which are passed to the application.
+ *
+ * @note All this function does is to disconnect. This could have been done by simply setting
+ *       the disconnect_on_fail config parameter, but instead we use the event handler
+ *       mechanism to demonstrate its use.
+ *
+ * @param[in] p_evt  Event received from the Connection Parameters Module.
+ */
+static void on_conn_params_evt(ble_conn_params_evt_t * p_evt)
+{
+    uint32_t err_code;
+
+    if(p_evt->evt_type == BLE_CONN_PARAMS_EVT_FAILED)
+    {
+        err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_CONN_INTERVAL_UNACCEPTABLE);
+        APP_ERROR_CHECK(err_code);
+    }
+}
+
+
+/**@brief Function for handling errors from the Connection Parameters module.
+ *
+ * @param[in] nrf_error  Error code containing information about what went wrong.
+ */
+static void conn_params_error_handler(uint32_t nrf_error)
+{
+    APP_ERROR_HANDLER(nrf_error);
+}
+
+
+/**@brief Function for initializing the Connection Parameters module.
+ */
+static void conn_params_init(void)
+{
+    uint32_t               err_code;
+    ble_conn_params_init_t cp_init;
+
+    memset(&cp_init, 0, sizeof(cp_init));
+
+    cp_init.p_conn_params                  = NULL;
+    cp_init.first_conn_params_update_delay = FIRST_CONN_PARAMS_UPDATE_DELAY;
+    cp_init.next_conn_params_update_delay  = NEXT_CONN_PARAMS_UPDATE_DELAY;
+    cp_init.max_conn_params_update_count   = MAX_CONN_PARAMS_UPDATE_COUNT;
+    cp_init.start_on_notify_cccd_handle    = BLE_GATT_HANDLE_INVALID;
+    cp_init.disconnect_on_fail             = false;
+    cp_init.evt_handler                    = on_conn_params_evt;
+    cp_init.error_handler                  = conn_params_error_handler;
+
+    err_code = ble_conn_params_init(&cp_init);
+    APP_ERROR_CHECK(err_code);
+}
+
+
+
+
+
+/**@brief Function for handling advertising events.
+ *
+ * @details This function will be called for advertising events which are passed to the application.
+ *
+ * @param[in] ble_adv_evt  Advertising event.
+ */
+static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
+{
+    switch (ble_adv_evt)
+    {
+    case BLE_ADV_EVT_FAST:
+
+        break;
+    case BLE_ADV_EVT_IDLE:
+        // sleep_mode_enter();
+        break;
+    default:
+        break;
+    }
+}
+
+bool IsBleConnect(void)
+{
+    if(m_conn_handle == BLE_CONN_HANDLE_INVALID)
+        return false;
+    else
+        return true;
+}
+/**@brief Function for the Application's S110 SoftDevice event handler.
+ *
+ * @param[in] p_ble_evt S110 SoftDevice event.
+ */
+static void on_ble_evt(ble_evt_t * p_ble_evt)
+{
+    uint32_t                         err_code;
+
+    switch (p_ble_evt->header.evt_id)
+    {
+    case BLE_GAP_EVT_CONNECTED:
+        m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
+        break;
+
+    case BLE_GAP_EVT_TIMEOUT:
+    case BLE_GAP_EVT_DISCONNECTED:
+        StartAdv(true);
+        break;
+    case BLE_GATTC_EVT_TIMEOUT:
+    case BLE_GATTS_EVT_TIMEOUT:
+
+        // Disconnect on GATT Server and Client time-out events.
+        err_code = sd_ble_gap_disconnect(m_conn_handle,
+                                         BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+        APP_ERROR_CHECK(err_code);
+        break;
+
+    default:
+        // No implementation needed.
+        break;
+    }
+}
+
+
+/**@brief Function for dispatching a S110 SoftDevice event to all modules with a S110 SoftDevice
+ *        event handler.
+ *
+ * @details This function is called from the S110 SoftDevice event interrupt handler after a S110
+ *          SoftDevice event has been received.
+ *
+ * @param[in] p_ble_evt  S110 SoftDevice event.
+ */
+static void ble_evt_dispatch(ble_evt_t * p_ble_evt)
+{
+    dm_ble_evt_handler(p_ble_evt);
+    ble_db_discovery_on_ble_evt(&m_ble_db_discovery, p_ble_evt);
+    ble_conn_params_on_ble_evt(p_ble_evt);
+    ble_ancs_c_on_ble_evt(&m_ancs_c, p_ble_evt);
+    ble_nus_on_ble_evt(&m_nus, p_ble_evt);
+    on_ble_evt(p_ble_evt);
+
+}
+/**@brief Function for dispatching a system event to interested modules.
+ *
+ * @details This function is called from the system event interrupt handler after a system
+ *          event has been received.
+ *
+ * @param[in] sys_evt  System stack event.
+ */
+static void sys_evt_dispatch(uint32_t sys_evt)
+{
+    pstorage_sys_event_handler(sys_evt);
+    ble_advertising_on_sys_evt(sys_evt);
+}
+
+
+/**@brief Function for the S110 SoftDevice initialization.
+ *
+ * @details This function initializes the S110 SoftDevice and the BLE event interrupt.
+ */
+static void ble_stack_init(void)
+{
+    uint32_t err_code;
+
+    // Initialize SoftDevice.
+    SOFTDEVICE_HANDLER_INIT(NRF_CLOCK_LFCLKSRC_XTAL_20_PPM, NULL);//NRF_CLOCK_LFCLKSRC_XTAL_20_PPM
+
+    // Enable BLE stack.
+    ble_enable_params_t ble_enable_params;
+    memset(&ble_enable_params, 0, sizeof(ble_enable_params));
+#ifdef S130
+    ble_enable_params.gatts_enable_params.attr_tab_size   = BLE_GATTS_ATTR_TAB_SIZE_DEFAULT;
+#endif
+    ble_enable_params.gatts_enable_params.service_changed = IS_SRVC_CHANGED_CHARACT_PRESENT;
+    err_code = sd_ble_enable(&ble_enable_params);
+    APP_ERROR_CHECK(err_code);
+
+    // Subscribe for BLE events.
+    err_code = softdevice_ble_evt_handler_set(ble_evt_dispatch);
+    APP_ERROR_CHECK(err_code);
+
+
+    // Register with the SoftDevice handler module for System events.
+    err_code = softdevice_sys_evt_handler_set(sys_evt_dispatch);
+    APP_ERROR_CHECK(err_code);
+}
+
+
+
+
+/**@brief   Function for handling app_uart events.
+ *
+ * @details This function will receive a single character from the app_uart module and append it to
+ *          a string. The string will be be sent over BLE when the last character received was a
+ *          'new line' i.e '\n' (hex 0x0D) or if the string has reached a length of
+ *          @ref NUS_MAX_DATA_LENGTH.
+ */
+/**@snippet [Handling the data received over UART] */
+void uart_event_handle(app_uart_evt_t * p_event)
+{
+    static uint8_t data_array[BLE_NUS_MAX_DATA_LEN];
+    static uint8_t index = 0;
+    uint32_t       err_code;
+
+    switch (p_event->evt_type)
+    {
+    case APP_UART_DATA_READY:
+        // UNUSED_VARIABLE(app_uart_get(&data_array[index]));
+        index++;
+
+        if ((data_array[index - 1] == '\n') || (index >= (BLE_NUS_MAX_DATA_LEN)))
+        {
+            err_code = ble_nus_string_send(&m_nus, data_array, index);
+            if (err_code != NRF_ERROR_INVALID_STATE)
+            {
+                APP_ERROR_CHECK(err_code);
+            }
+
+            index = 0;
+        }
+        break;
+
+    case APP_UART_COMMUNICATION_ERROR:
+        APP_ERROR_HANDLER(p_event->data.error_communication);
+        break;
+
+    case APP_UART_FIFO_ERROR:
+        APP_ERROR_HANDLER(p_event->data.error_code);
+        break;
+
+    default:
+        break;
+    }
+}
+
+uint64_t mac_addr64;
+uint8_t mac_buf[8];
+uint8_t mac_data[6];
+uint64_t get_mac(uint8_t *mac_add_array)
+{
+    /*********************************************
+    * Mac address
+    **********************************************/
+    uint64_t mac_address = 0;
+    int8_t i = 0;
+
+    ble_gap_addr_t device_addr;
+    if(NRF_SUCCESS == sd_ble_gap_address_get(&device_addr)) {
+        for(i = 0; i < BLE_GAP_ADDR_LEN; ++i) {
+            mac_data[i]=device_addr.addr[5-i];
+            mac_address |= ((uint64_t)device_addr.addr[i]) << (i * 8);
+        }
+    } else {
+        mac_address = ((((uint64_t)(NRF_FICR->DEVICEADDR[1] & 0xFFFF)) << 32) | ((uint64_t)NRF_FICR->DEVICEADDR[0]));
+    }
+
+    for(i = (BLE_GAP_ADDR_LEN - sizeof(uint16_t) - 1); i>=0; --i) {
+        mac_add_array[(BLE_GAP_ADDR_LEN - sizeof(uint16_t) - 1) - i] =  (mac_address >> 8*i) & 0xff;
+    }
+    return mac_address;
+
+}
+
+/**@snippet [UART Initialization] */
+
+uint8_t key_press_500ms_times=0;
+/**@brief Function for initializing the Advertising functionality.
+ */
+static void advertising_init(void)
+{
+    uint32_t      err_code;
+    ble_advdata_t advdata;
+
+//   int8_t        tx_power_level = -4;
+//	 static ble_advdata_manuf_data_t manuf_data ;
+//    ble_advdata_t scanrsp;
+    static ble_uuid_t                 adv_uuids= {BLE_UUID_NUS_SERVICE,BLE_UUID_TYPE_BLE};
+    const uint8_t * blename;
+
+
+    ble_gap_conn_sec_mode_t sec_mode;
+
+    BLE_GAP_CONN_SEC_MODE_SET_OPEN(&sec_mode);
+
+    blename=(const uint8_t *) DEVICE_NAME;
+#ifdef BLE_CHANGE_NAME
+    if(key_press_500ms_times>3)
+        blename=(const uint8_t *) DEVICE_NAME_D;
+#endif
+
+
+    err_code = sd_ble_gap_device_name_set(&sec_mode,
+                                          (const uint8_t *) blename,
+                                          strlen((const char *)blename));
+
+
+    APP_ERROR_CHECK(err_code);
+
+    // Build advertising data struct to pass into @ref ble_advertising_init.
+    memset(&advdata, 0, sizeof(advdata));
+    advdata.name_type          = BLE_ADVDATA_FULL_NAME;
+    advdata.include_appearance = false;
+    advdata.flags              = BLE_GAP_ADV_FLAGS_LE_ONLY_LIMITED_DISC_MODE;
+
+    // advdata.p_tx_power_level        = &tx_power_level;
+//
+    advdata.uuids_complete.uuid_cnt=1;
+    advdata.uuids_complete.p_uuids=&adv_uuids;
+    // advdata.p_manuf_specific_data=&manuf_data;
+
+//    memset(&scanrsp, 0, sizeof(scanrsp));
+//    scanrsp.uuids_complete.uuid_cnt = sizeof(m_adv_uuids) / sizeof(m_adv_uuids[0]);
+//    scanrsp.uuids_complete.p_uuids  = m_adv_uuids;
+
+    mac_addr64= get_mac(mac_buf);
+    uint16_t tmp_company;
+    uint8_t menupanybuf[9];
+    menupanybuf[0]=mac_data[0];
+    menupanybuf[1]=mac_data[1];
+    menupanybuf[2]=mac_data[2];
+    menupanybuf[3]=mac_data[3];
+    menupanybuf[4]=mac_data[4];
+    menupanybuf[5]=mac_data[5];
+    menupanybuf[6]=version[0];
+    menupanybuf[7]=version[1];
+    menupanybuf[8]=version[2];
+    tmp_company=menupanybuf[1];
+    tmp_company=(tmp_company<<8)|menupanybuf[0];
+
+    ble_advdata_manuf_data_t adv_manu;
+    adv_manu.data.p_data = &menupanybuf[2];
+    adv_manu.data.size = 7;
+    adv_manu.company_identifier = tmp_company;
+
+
+    advdata.p_manuf_specific_data = &adv_manu;
+
+
+    ble_adv_modes_config_t options = {0};
+    options.ble_adv_fast_enabled  = BLE_ADV_FAST_ENABLED;
+    options.ble_adv_fast_interval = APP_ADV_INTERVAL;
+    options.ble_adv_fast_timeout  = APP_ADV_TIMEOUT_IN_SECONDS;
+
+    options.ble_adv_slow_enabled  = BLE_ADV_SLOW_ENABLED;
+    options.ble_adv_slow_interval = APP_ADV_SLOW_INTERVAL;
+    options.ble_adv_slow_timeout  = APP_ADV_SLOW_TIMEOUT_IN_SECONDS;
+
+    err_code = ble_advertising_init(&advdata,NULL, &options, on_adv_evt, NULL);
+    APP_ERROR_CHECK(err_code);
+}
+
+
+
+
+
+/**@brief Function for placing the application in low power state while waiting for events.
+ */
+void power_manage(void)
+{
+    if(ble_enable_flg)
+    {
+        uint32_t err_code = sd_app_evt_wait();
+        APP_ERROR_CHECK(err_code);
+    } else
+    {
+        __WFE();
+        __SEV();
+        __WFE();
+    }
+}
+
+
+//static app_timer_id_t            m_sec_req_timer_id;                       /**< Security request timer. The timer lets us start pairing request if one does not arrive from the Central. */
+
+///**@brief Function for handling the security request timer time-out.
+// *
+// * @details This function is called each time the security request timer expires.
+// *
+// * @param[in] p_context  Pointer used for passing context information from the
+// *                       app_start_timer() call to the time-out handler.
+// */
+//static void sec_req_timeout_handler(void * p_context)
+//{
+//    uint32_t             err_code;
+//    dm_security_status_t status;
+
+//    if (m_conn_handle != BLE_CONN_HANDLE_INVALID)
+//    {
+//        err_code = dm_security_status_req(&m_peer_handle, &status);
+//        APP_ERROR_CHECK(err_code);
+
+//        // If the link is still not secured by the peer, initiate security procedure.
+//        if (status == NOT_ENCRYPTED)
+//        {
+//            err_code = dm_security_setup_req(&m_peer_handle);
+//            APP_ERROR_CHECK(err_code);
+//        }
+//    }
+//}
+
+
+void StartAdv(bool startfast)
+{
+    uint32_t err_code;
+    m_nus.is_notification_enabled=false;
+    m_conn_handle = BLE_CONN_HANDLE_INVALID;
+    advertising_init();
+    if(true==startfast)
+    {
+        err_code = ble_advertising_start(BLE_ADV_MODE_FAST);
+    } else
+    {
+        err_code = ble_advertising_start(BLE_ADV_MODE_SLOW);
+    }
+    APP_ERROR_CHECK(err_code);
+}
+
+
+void AskPair(void)
+{
+
+    uint32_t             err_code;
+    dm_security_status_t status;
+
+    if (m_conn_handle != BLE_CONN_HANDLE_INVALID)
+    {
+        err_code = dm_security_status_req(&m_peer_handle, &status);
+        APP_ERROR_CHECK(err_code);
+
+        // If the link is still not secured by the peer, initiate security procedure.
+        if (status == NOT_ENCRYPTED)
+        {
+            err_code = dm_security_setup_req(&m_peer_handle);
+            APP_ERROR_CHECK(err_code);
+        }
+    }
+}
+/**@brief Function for handling the security request timer time-out.
+ *
+ * @details This function is called each time the security request timer expires.
+ *
+ * @param[in] p_context  Pointer used for passing context information from the
+ *                       app_start_timer() call to the time-out handler.
+ */
+//static void sec_req_timeout_handler(void * p_context)/*请求*/
+//{
+////AskPair();
+//}
+
+
+
+
+
+/**@brief Function for handling the Device Manager events.
+ *
+ * @param[in] p_evt  Data associated to the Device Manager event.
+ */
+static uint32_t device_manager_evt_handler(dm_handle_t const * p_handle,
+        dm_event_t const  * p_evt,
+        ret_code_t          event_result)
+{
+    uint32_t err_code;
+    APP_ERROR_CHECK(event_result);
+    ble_ancs_c_on_device_manager_evt(&m_ancs_c, p_handle, p_evt);
+
+    switch (p_evt->event_id)
+    {
+    case DM_EVT_CONNECTION:
+        m_peer_handle = (*p_handle);
+//        err_code      = app_timer_start(m_sec_req_timer_id, SECURITY_REQUEST_DELAY, NULL);
+//        APP_ERROR_CHECK(err_code);
+        break;
+
+    case DM_EVT_LINK_SECURED:
+        err_code = ble_db_discovery_start(&m_ble_db_discovery,
+                                          p_evt->event_param.p_gap_param->conn_handle);
+        APP_ERROR_CHECK(err_code);
+        break;
+
+    default:
+        break;
+
+    }
+    return NRF_SUCCESS;
+}
+
+
+/**@brief Function for initializing the Device Manager.
+ *
+ * @param[in] erase_bonds  Indicates whether bonding information should be cleared from
+ *                         persistent storage during initialization of the Device Manager.
+ */
+static void device_manager_init(bool erase_bonds)
+{
+    uint32_t               err_code;
+    dm_init_param_t        init_param = {.clear_persistent_data = erase_bonds};
+    dm_application_param_t register_param;
+
+    // Initialize persistent storage module.
+    err_code = pstorage_init();
+    APP_ERROR_CHECK(err_code);
+
+    err_code = dm_init(&init_param);
+    APP_ERROR_CHECK(err_code);
+
+    memset(&register_param.sec_param, 0, sizeof(ble_gap_sec_params_t));
+
+    register_param.sec_param.bond         = SEC_PARAM_BOND;
+    register_param.sec_param.mitm         = SEC_PARAM_MITM;
+    register_param.sec_param.io_caps      = SEC_PARAM_IO_CAPABILITIES;
+    register_param.sec_param.oob          = SEC_PARAM_OOB;
+    register_param.sec_param.min_key_size = SEC_PARAM_MIN_KEY_SIZE;
+    register_param.sec_param.max_key_size = SEC_PARAM_MAX_KEY_SIZE;
+    register_param.evt_handler            = device_manager_evt_handler;
+    register_param.service_type           = DM_PROTOCOL_CNTXT_GATT_SRVR_ID;
+
+    memcpy(&m_sec_param, &register_param.sec_param, sizeof(ble_gap_sec_params_t));
+
+    err_code = dm_register(&m_app_handle, &register_param);
+    APP_ERROR_CHECK(err_code);
+}
+/**@brief Function for initializing the database discovery module.
+ */
+static void db_discovery_init(void)
+{
+    uint32_t err_code = ble_db_discovery_init();
+    APP_ERROR_CHECK(err_code);
+}
+
+
+bool erase_bound=false;
+
+void EraseBond(void)
+{
+erase_bound=true;
+}
+
+uint8_t ble_enable_flg=0;
+/*
+开启或者关闭led
+*/
+
+void s110_config_enable(bool en_ble)
+{
+    uint32_t err_code;
+    static uint8_t first=1;
+
+    if(1==first)
+    {
+        first=0;
+        // Create security request timer.
+//        err_code = app_timer_create(&m_sec_req_timer_id,
+//                                    APP_TIMER_MODE_SINGLE_SHOT,
+//                                    sec_req_timeout_handler);
+//        APP_ERROR_CHECK(err_code);
+    }
+
+   if(false!=en_ble)
+    {
+        ble_stack_init();
+        device_manager_init(erase_bound);
+				erase_bound=false;
+        db_discovery_init();
+        gap_params_init();
+        services_init();
+        service_init_ancs();
+        conn_params_init();
+        StartAdv(true);
+        ble_enable_flg=1;
+
+    } else
+    {
+        ble_enable_flg=0;
+        err_code=softdevice_handler_sd_disable();
+        APP_ERROR_CHECK(err_code);
+        err_code=ble_conn_params_stop();
+        APP_ERROR_CHECK(err_code);
+			
+			
+			
+			
+    }
+
+}
+
+
+
+
+void close_all_gpio(void)
+{
+	
+
+    uint8_t i;
+    for(i = 0; i< 31 ; i++)
+    {
+        if((i!=26)&&(i!=27))/*26 27是32.768的晶体*/
+            nrf_gpio_close(i);
+    }
+
+
+	
+        nrf_gpio_cfg_output(KEY_IC_POWER_PIN);
+        nrf_gpio_pin_clear(KEY_IC_POWER_PIN);
+
+        nrf_gpio_cfg_output(KEY_PIN);
+        nrf_gpio_pin_clear(KEY_PIN);
+				delay_ms(500);
+				nrf_gpio_cfg_input(KEY_PIN,NRF_GPIO_PIN_NOPULL);
+				nrf_gpio_pin_set(KEY_IC_POWER_PIN);
+    
+}
+
+void system_off(void)
+{
+
+
+			
+ 
+			  __DSB();
+			  delay_ms(500);
+        /*拉低reset管脚复位*/
+        NRF_POWER->RESET=1;
+        nrf_gpio_cfg_output(RESET_PIN);
+        nrf_gpio_pin_clear(RESET_PIN);
+			 __DSB();
+
+    while(1);
+}
+
+
+/*ble 发送数据接口*/
+void BleWriteData(uint8_t * p_string, uint16_t length)
+{
+    uint32_t i;
+
+    for(i=0; i<4; i++)
+    {
+        uint32_t err_code = ble_nus_string_send(&m_nus, p_string, length);
+        if (err_code == NRF_SUCCESS)
+        {
+            return;
+        }
+        delay_ms(500);
+    }
+
+
+}
+
+
+/*ble接收数据回调*/
+static void nus_data_handler(ble_nus_t * p_nus, uint8_t * p_data, uint16_t length)
+{
+    BleQueueIn(p_data,(uint8_t)length);
+
+}
+
