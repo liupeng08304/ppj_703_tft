@@ -1,5 +1,0 @@
---cpu Cortex-M4.fp ".\_build\main.o" ".\_build\nrf_bootloader_app_start.o" ".\_build\nrf_dfu_mbr.o" ".\_build\nrf_bootloader_app_start_asm.o" ".\_build\boot.o" ".\_build\arm_startup_nrf52.o" ".\_build\system_nrf52.o" 
---library_type=microlib --strict --scatter ".\_build\H703_BOOT.sct" 
---diag_suppress 6330 --summary_stderr --info summarysizes --map --xref --callgraph --symbols 
---info sizes --info totals --info unused --info veneers 
- --list ".\_build\H703_BOOT.map" -o .\_build\H703_BOOT.axf

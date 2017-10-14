@@ -1,3 +1,0 @@
----- LcdDisplayHr Matches (2 in 2 files) ----
-Ui_app.c (e:\proj_band\h703\moudle\ui):    LcdDisplayHr,
-Ui_app.h (e:\proj_band\h703\moudle\ui):ENUM_INDEX LcdDisplayHr(ENUM_SEM sem);
