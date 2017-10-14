@@ -1,0 +1,60 @@
+#ifndef LE25U40CQH__H__
+#define LE25U40CQH__H__
+#include "nrf_gpio.h"
+#include "spi_master.h"
+#include "stdint.h"
+#include "stdbool.h"
+
+#define WRITE_ENABLE 0x06
+#define ReadRigesterStutes   0x05//
+#define WRITE_DISABLE 0x04
+
+
+#define SIZE_4k 0xd7
+#define SIZE_64k 0xd8
+#define SIZE_FLASH 0xc7
+
+#define WRITE_PAGE      0x02
+#define READ_FLASH_FAST      0x0b
+#define ID_READ    			0x9f
+#define Dummy_Byte 0xA5
+#define POWER_DOWN 0xb9
+#define NORMAL_POWER 0xab
+
+
+
+/*
+        
+*/
+#define SIZE64K	0x10000
+#define SIZE4K  0x01000
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+extern bool SpiOkFlg;
+
+void InitExFlash(void);
+uint32_t  Flash_ReadID(void);
+void Flash_Sector_Erase(uint32_t Addr,uint8_t  size);
+void SPI_FLASH_WriteCont(uint8_t *pBuffer, uint32_t WriteAddr, uint32_t NumByteToWrite,bool erase);
+void SPI_FLASH_ReadCont(uint8_t* pBuffer, uint32_t ReadAddr, uint32_t NumByteToRead);
+uint8_t SpiSend(NRF_SPI_Type *spi,uint8_t datasend);
+void StartFlashSpi(bool strtFlg);
+
+
+
+
+#endif
+
+
