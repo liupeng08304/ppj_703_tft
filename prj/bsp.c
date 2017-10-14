@@ -89,8 +89,8 @@ void button_event_handler(uint8_t pin_no, uint8_t button_action)
 {
     if((KEY_PIN==pin_no)&&(button_action==APP_BUTTON_PUSH))
     {
-//        SendSem(PRESS_KEY);
-//        LOG("key\r\n");
+        SendSem(PRESS_KEY);
+        LOG("key\r\n");
     }
 
 }
@@ -144,7 +144,7 @@ void LowerPower(void)
 bool wait_key_to_power_on(void)
 {
 	
-	#if 0
+	#if 1
     static uint8_t sta=0,press_wait_time;
 
     switch(sta)
@@ -219,7 +219,7 @@ void ManagePowerOn(void)
    display_in_sleep_mode(1);///////////////////////////////xxxx
 
     /*key*/
-//    buttons_init();
+   buttons_init();
 
     /*显示版本号等待按下*/
     if(StuEeprom.StuPara.ask_version)
@@ -688,10 +688,7 @@ void task_process_message(  ENUM_SEM rev_sem)
     switch(rev_sem)
     {
 			
-			case PRESS_KEY:
-       print_ket_state();
-			 break;
-			
+
         case TIME_MINUTE:
             updateDateInMin(true);
             break;

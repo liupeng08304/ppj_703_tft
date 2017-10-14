@@ -1783,7 +1783,7 @@ bool AccSensorConfig(void)
         returnvalue&=LIS3DH_SetBDU(MEMS_DISABLE); //?? BDU
         returnvalue&=LIS3DH_FIFOModeEnable(LIS3DH_FIFO_STREAM_MODE);
         returnvalue&=LIS3DH_SetWaterMark(31);
-				Acc__EnableClickDetect();
+//				Acc__EnableClickDetect();
         //	LIS3DH_SetInt1Pin(LIS3DH_WTM_ON_INT1_ENABLE);
         if(returnvalue)
         {

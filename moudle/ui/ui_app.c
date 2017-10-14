@@ -816,20 +816,20 @@ bool wait_key_to_power_off(void)
         break;
     case 1:/*等待按键释放*/
 			
-		   if(get_time_escape_ms(NRF_RTC1->COUNTER,timertc)>20000)
-        {
-            LcdDisplayOff(INIT_UI);
-            return true;
-        }
-		
-//        if(ReadKey())/*释放了*/
+//		   if(get_time_escape_ms(NRF_RTC1->COUNTER,timertc)>20000)
 //        {
-//            delay_ms(50);
-//            if(ReadKey())/*释放了*/
-//            {
-//                sta++;
-//            }
+//            LcdDisplayOff(INIT_UI);
+//            return true;
 //        }
+//		
+        if(ReadKey())/*释放了*/
+        {
+            delay_ms(50);
+            if(ReadKey())/*释放了*/
+            {
+                sta++;
+            }
+        }
         break;
     case 2:/*等待按下*/
         if(!ReadKey())
