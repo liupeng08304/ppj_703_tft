@@ -1,0 +1,13 @@
+.\_build\rfid52.o: ..\moudle\s110_src\rfid52.c
+.\_build\rfid52.o: ..\moudle\s110_src\rfid52.h
+.\_build\rfid52.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+.\_build\rfid52.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdbool.h
+.\_build\rfid52.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\string.h
+.\_build\rfid52.o: ..\components\device\nrf52.h
+.\_build\rfid52.o: ..\components\toolchain\cmsis\include\core_cm4.h
+.\_build\rfid52.o: ..\components\toolchain\cmsis\include\core_cmInstr.h
+.\_build\rfid52.o: ..\components\toolchain\cmsis\include\cmsis_armcc.h
+.\_build\rfid52.o: ..\components\toolchain\cmsis\include\core_cmFunc.h
+.\_build\rfid52.o: ..\components\toolchain\cmsis\include\core_cmSimd.h
+.\_build\rfid52.o: ..\components\toolchain\system_nrf52.h
+.\_build\rfid52.o: ..\components\device\nrf52_bitfields.h
